@@ -14,6 +14,7 @@ use Exception;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Models\Country;
 use Illuminate\Support\Facades\Log;
 
 class ShipmentController extends Controller
@@ -39,85 +40,63 @@ class ShipmentController extends Controller
     /**
      * Store a newly created resource in storage.
      */
-    public function store(Request $request)
-    {
-       try{
-            DB::beginTransaction();
-            $request->validate([
-                'description'   => 'required',
-                'receiver'  => 'required',
-                'sender_address'    => 'required',
-                'receiver_address'  => 'required',
-                'created_at_unix'   => 'required|integer'
-            ]);
-            $serialNum =  Shipment::getServiceNum();
+     public function store(Request $request){
 
-            if(empty($request->receiver['id'])){
-                $receiver = Client::create([
-                    'phone' => $request->receiver['phone'],
-                    'name'  => $request->receiver['name'],
-                    'image' => 'uploads/images/user_default_image.png'
-                ]);
-            }else{
-                $receiver = Client::findOrFail($request->receiver['id']);
-            }
-            if(empty($request->receiver_address['id'])){
-                $receiverCountry = \App\Models\Country::find($request->receiver_address['country']['id']);
-                $this->checkCountryLimitations($receiverCountry);
-                $receiverAddress = Address::create([
-                    'name' => $request->receiver_address['name'],
-                    'latitude'  => $request->receiver_address['latitude'],
-                    'longitude'  => $request->receiver_address['longitude'],
-                    'country_id'    => $request->receiver_address['country']['id'],
-                ]);
-                $receiverAddress->clients()->attach($receiver->id);
-                $receiverAddress->setRelation('country',$receiverCountry);
-            }else{
-                $receiverAddress = Address::findOrFail($request->receiver_address['id']);
+
+
+        $validatedData = $request->validate([
+            'description'        => 'required',
+            'receiver'           => 'required|array',
+            'sender_address'     => 'required|array',
+            'receiver_address'   => 'required|array',
+            'created_at_unix'    => 'required|integer',
+        ]);
+
+        try{
+
+
+            $shipment = DB::transaction(function () use ($validatedData) {
+
+                $receiver = $this->createOrFindClient($validatedData['receiver']);
+
+
+                $receiverAddress = $this->createOrFindAddress(
+                    $validatedData['receiver_address'],
+                    $receiver
+                );
                 $this->checkCountryLimitations($receiverAddress->country);
-            }
-            $sender = Client::where('user_id',$this->user_id)->first();
-            if(empty($request->sender_address['id'])){
-                $senderCountry = \App\Models\Country::find($request->sender_address['country']['id']);
-                $senderAddress = Address::create([
-                    'name' => $request->sender_address['name'],
-                    'latitude'  => $request->sender_address['latitude'],
-                    'longitude'  => $request->sender_address['longitude'],
-                    'country_id'    => $request->sender_address['country']['id'],
+
+                $sender = Client::where('user_id', $this->user_id)->firstOrFail();
+
+                $senderAddress = $this->createOrFindAddress(
+                    $validatedData['sender_address'],
+                    $sender
+                );
+
+                $shipment = Shipment::create([
+                    'serial_num'          => Shipment::getServiceNum(),
+                    'sender_id'           => $sender->id,
+                    'description'         => $validatedData['description'],
+                    'receiver_id'         => $receiver->id,
+                    'sender_address_id'   => $senderAddress->id,
+                    'receiver_address_id' => $receiverAddress->id,
+                    'created_at_unix'     => $validatedData['created_at_unix'],
+                    'status'              => 1,
                 ]);
-                $senderAddress->clients()->attach($sender->id);
-                $senderAddress->setRelation('country',$senderCountry);
-            }else{
-                $senderAddress = Address::findOrFail($request->receiver_address['id']);
-            }
 
-            $shipment = Shipment::create([
-                'serial_num'    => $serialNum,
-                'sender_id'       => $sender->id,
-                'description'       => $request->description ?? '',
-                'receiver_id'       => $receiver->id,
-                'sender_address_id' => $senderAddress->id,
-                'receiver_address_id'  => $receiverAddress->id,
-                'created_at_unix'   => $request->created_at_unix,
-                'status'            => 1
-            ]);
-
-            $shipment->setRelation('receiver',$receiver);
-            $shipment->setRelation('sender',$sender);
-            $shipment->setRelation('receiverAddress',$receiverAddress);
-            $shipment->setRelation('senderAddress',$senderAddress);
-            DB::commit();
-            return apiResponse(['shipment'  => new ShipmentResource($shipment)]);
-       }catch(Exception $e){
-            DB::rollBack();
-            return \apiResponse(null,$e->getMessage(),400);
-       }
-
-
-
-
-
+                return $shipment;
+            });
+            return apiResponse(['shipment' => new ShipmentResource($shipment)]);
+        }
+        catch(Exception $e){
+            return apiResponse(null, $e->getMessage(), 400);
+        }
     }
+
+
+
+
+
 
     /**
      * Display the specified resource.
@@ -177,11 +156,50 @@ class ShipmentController extends Controller
     }
 
 
-    private function checkCountryLimitations($country){
-        if(Shipment::whereHas('receiverAddress',function($query) use($country){
-            $query->where('country_id',$country->id);
-        })->whereRaw('DATE(created_at) = CURDATE()')->count() == 100){
-            throw new Exception("Country daily limitations has already reached! please try again tomorrow");
+        private function createOrFindAddress(array $data, Client $client)
+    {
+        if (empty($data['id'])) {
+            $country = Country::findOrFail($data['country']['id']);
+            $address = Address::create([
+                'name'       => $data['name'],
+                'latitude'   => $data['latitude'],
+                'longitude'  => $data['longitude'],
+                'country_id' => $data['country']['id'],
+            ]);
+            $address->clients()->attach($client->id);
+            $address->setRelation('country', $country);
+            return $address;
         }
+
+        return Address::findOrFail($data['id']);
+    }
+
+    private function createOrFindClient(array $data)
+    {
+        if (empty($data['id'])) {
+            return Client::create([
+                'phone' => $data['phone'],
+                'name'  => $data['name'],
+                // 'image'=>''
+                // // 'image' => $data['image'] ?? 'uploads/images/user_default_image.png',
+            ]);
+        }
+
+        return Client::findOrFail($data['id']);
+    }
+    private function checkCountryLimitations($country)
+    {
+        DB::transaction(function () use ($country) {
+            $shipmentCount = Shipment::whereHas('receiverAddress', function ($query) use ($country) {
+                $query->where('country_id', $country->id);
+            })->whereRaw('DATE(created_at) = CURDATE()')
+              ->select('id')
+              ->lockForUpdate()
+              ->count();
+
+            if ($shipmentCount >= 100) {
+                throw new Exception("The daily shipment limit for this country has been reached. Please try again tomorrow.");
+            }
+        });
     }
 }

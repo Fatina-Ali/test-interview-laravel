@@ -16,7 +16,7 @@ return new class extends Migration
             $table->string('name', 100);
             $table->string('latitude')->nullable();
             $table->string('longitude')->nullable();
-            $table->integer('client_id');
+            $table->integer('client_id')->nullable();
             $table->integer('country_id')->nullable();
             $table->timestamps();
         });

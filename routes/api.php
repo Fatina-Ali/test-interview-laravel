@@ -2,10 +2,11 @@
 
 use App\Http\Controllers\Api\AuthController;
 //use App\Http\Controllers\Api\CategoryController;
+// use App\Http\Controllers\Api\ShipmentController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\AddressController as AddressController;
-use App\Http\Controllers\Api\ClientController;
+// use App\Http\Controllers\Api\AddressController as AddressController;
+// use App\Http\Controllers\Api\ClientController;
 
 /*
 |--------------------------------------------------------------------------
@@ -32,7 +33,7 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout'])->name("api.logout");
     Route::post('changePassword', [AuthController::class, 'changePassword'])->name("api.password.change");
-    Route::get('filer/{var}',[ClientController::class, 'filer']);
+    Route::get('filer/{var}',[\App\Http\Controllers\Api\ClientController::class, 'filer']);
     //client
     Route::group([  'prefix' => 'client','middleware' => 'client'], function () {
 
@@ -57,4 +58,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('notifications', \App\Http\Controllers\Api\NotificationController::class);
 
 });
+
 
