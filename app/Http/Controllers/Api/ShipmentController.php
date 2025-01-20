@@ -7,43 +7,36 @@ use App\Http\Resources\AddressResource;
 use App\Http\Resources\ShipmentResource;
 use App\Models\Address;
 use App\Models\Client;
-use App\Models\Shipment;
-use App\Models\ShipmentImage;
-use Carbon\Carbon;
-use Exception;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use App\Models\Country;
+use App\Models\Shipment;
+use GuzzleHttp\Client as HttpClient;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Exception;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ShipmentController extends Controller
 {
     protected $user_id;
+
     public function __construct()
     {
         $this->middleware(function ($request, $next) {
             $this->user_id = auth('sanctum')->user()->id ?? null;
-            // Proceed with the request
             return $next($request);
         });
     }
 
-
     public function index()
     {
-
-        $shipments = Shipment::where('sender_id',auth()->user()->client->id)->get();
+        $shipments = Shipment::where('sender_id', auth()->user()->client->id)->get();
         return apiResponse(ShipmentResource::collection($shipments));
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-     public function store(Request $request){
-
-
-
+    public function store(Request $request)
+    {
         $validatedData = $request->validate([
             'description'        => 'required',
             'receiver'           => 'required|array',
@@ -52,28 +45,15 @@ class ShipmentController extends Controller
             'created_at_unix'    => 'required|integer',
         ]);
 
-        try{
-
-
+        try {
             $shipment = DB::transaction(function () use ($validatedData) {
-
-                $receiver = $this->createOrFindClient($validatedData['receiver']);
-
-
-                $receiverAddress = $this->createOrFindAddress(
-                    $validatedData['receiver_address'],
-                    $receiver
-                );
-                $this->checkCountryLimitations($receiverAddress->country);
+                $receiver = $this->handleClient($validatedData['receiver']);
+                $receiverAddress = $this->handleAddress($validatedData['receiver_address'], $receiver, true);
 
                 $sender = Client::where('user_id', $this->user_id)->firstOrFail();
+                $senderAddress = $this->handleAddress($validatedData['sender_address'], $sender);
 
-                $senderAddress = $this->createOrFindAddress(
-                    $validatedData['sender_address'],
-                    $sender
-                );
-
-                $shipment = Shipment::create([
+                return Shipment::create([
                     'serial_num'          => Shipment::getServiceNum(),
                     'sender_id'           => $sender->id,
                     'description'         => $validatedData['description'],
@@ -83,117 +63,112 @@ class ShipmentController extends Controller
                     'created_at_unix'     => $validatedData['created_at_unix'],
                     'status'              => 1,
                 ]);
-
-                return $shipment;
             });
+
             return apiResponse(['shipment' => new ShipmentResource($shipment)]);
-        }
-        catch(Exception $e){
+        } catch (Exception $e) {
             return apiResponse(null, $e->getMessage(), 400);
         }
     }
 
-
-
-
-
-
-    /**
-     * Display the specified resource.
-     */
-    public function show( $id)
+    public function show($id)
     {
         try {
-            // Find the address by ID, or throw an exception if not found
-            $sh = Shipment::findOrFail($id);
-            // Return the response if the address is found
-            return apiResponse(ShipmentResource::make($sh));
+            $shipment = Shipment::findOrFail($id);
+            return apiResponse(ShipmentResource::make($shipment));
         } catch (ModelNotFoundException $e) {
-            // Return a response if the address is not found
-            return apiResponse(null, 'shipment not found', 404);
+            return apiResponse(null, 'Shipment not found', 404);
         }
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
     public function update(Request $request, Shipment $shipment)
     {
         if ($this->user_id !== $shipment->sender_id) {
             return apiResponse(null, __('You can only edit your own shipment.'), 403);
         }
-        $shipment->update($request->only(['receiver_id', 'status','category_id','description']));
 
-        return  apiResponse(new ShipmentResource($shipment));
+        $shipment->update($request->only(['receiver_id', 'status', 'category_id', 'description']));
+        return apiResponse(new ShipmentResource($shipment));
     }
 
-    function qrCode(Request $request) {
-        try{
+    public function qrCode(Request $request)
+    {
+        try {
             $shipment = Shipment::findBySerial($request->serial_num);
-            if($request->qr_code){
+
+            if ($request->qr_code) {
                 $shipment->qrcode = $request->qr_code;
                 $shipment->status = 2;
                 $shipment->on_the_way_at_unix = Carbon::now('UTC')->timestamp * 1000;
                 $shipment->save();
             }
-            return \apiResponse(['shipment' => $shipment]);
-        }catch(Exception $e){
-            return \apiResponse(null,$e->getMessage(),400);
+
+            return apiResponse(['shipment' => $shipment]);
+        } catch (Exception $e) {
+            return apiResponse(null, $e->getMessage(), 400);
         }
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
     public function destroy(Shipment $shipment)
     {
         if ($this->user_id !== $shipment->sender_id) {
             return apiResponse([], __('You can only delete your own Shipment.'), 403);
         }
+
         $shipment->images->delete();
         $shipment->delete();
-        return  apiResponse(null,__('Deleted Successfully'));
+
+        return apiResponse(null, __('Deleted Successfully'));
     }
 
-
-        private function createOrFindAddress(array $data, Client $client)
+    private function handleAddress(array $data, Client $client, $checkLimitations = false)
     {
         if (empty($data['id'])) {
             $country = Country::findOrFail($data['country']['id']);
+
+            if ($checkLimitations) {
+                $this->checkCountryLimitations($country);
+            }
+
+            $formattedAddress = $this->getFormattedAddress($data['latitude'], $data['longitude']);
+
             $address = Address::create([
-                'name'       => $data['name'],
-                'latitude'   => $data['latitude'],
-                'longitude'  => $data['longitude'],
-                'country_id' => $data['country']['id'],
+                'name'               => $data['name'],
+                'latitude'           => $data['latitude'],
+                'longitude'          => $data['longitude'],
+                'location_description' => $formattedAddress,
+                'country_id'         => $data['country']['id'],
+                'client_id'          => $client->id,
             ]);
-            $address->clients()->attach($client->id);
+
+            $address->indexByLocation();
             $address->setRelation('country', $country);
+
             return $address;
         }
 
         return Address::findOrFail($data['id']);
     }
 
-    private function createOrFindClient(array $data)
+    private function handleClient(array $data)
     {
         if (empty($data['id'])) {
             return Client::create([
                 'phone' => $data['phone'],
                 'name'  => $data['name'],
-                // 'image'=>''
-                // // 'image' => $data['image'] ?? 'uploads/images/user_default_image.png',
+                'image' => $data['image'] ?? 'uploads/images/user_default_image.png',
             ]);
         }
 
         return Client::findOrFail($data['id']);
     }
+
     private function checkCountryLimitations($country)
     {
         DB::transaction(function () use ($country) {
             $shipmentCount = Shipment::whereHas('receiverAddress', function ($query) use ($country) {
                 $query->where('country_id', $country->id);
             })->whereRaw('DATE(created_at) = CURDATE()')
-              ->select('id')
               ->lockForUpdate()
               ->count();
 
@@ -201,5 +176,17 @@ class ShipmentController extends Controller
                 throw new Exception("The daily shipment limit for this country has been reached. Please try again tomorrow.");
             }
         });
+    }
+
+    private function getFormattedAddress($latitude, $longitude)
+    {
+        $apiKey = env('GOOGLE_MAPS_API_KEY');
+        $url = "https://maps.googleapis.com/maps/api/geocode/json?latlng={$latitude},{$longitude}&key={$apiKey}";
+
+        $client = new HttpClient();
+        $response = $client->get($url);
+        $data = json_decode($response->getBody()->getContents(), true);
+
+        return $data['results'][0]['formatted_address'] ?? null;
     }
 }

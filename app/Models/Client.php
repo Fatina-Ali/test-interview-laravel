@@ -19,7 +19,7 @@ class Client extends Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
-    // public function address() {
-    //     return $this->hasMany(Address::class);
-    // }
+    public function address() {
+        return $this->hasMany(Address::class);
+    }
 }

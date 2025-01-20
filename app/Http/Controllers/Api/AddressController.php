@@ -8,29 +8,28 @@ use App\Models\Address;
 use App\Models\Client;
 use Exception;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class AddressController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
     protected $user_id;
+
     public function __construct()
     {
         $this->middleware(function ($request, $next) {
             $this->user_id = auth('sanctum')->user()->id ?? null;
-            // Proceed with the request
             return $next($request);
         });
     }
 
-
+    /**
+     * Display a listing of the resource.
+     */
     public function index()
     {
-        $addresses = Address::where('user_id',$this->user_id)->get();
+        $addresses = Address::where('user_id', $this->user_id)->get();
         return apiResponse(AddressResource::collection($addresses));
     }
 
@@ -39,58 +38,66 @@ class AddressController extends Controller
      */
     public function store(Request $request)
     {
-        try{
-            $address = Address::create([
-                'name'  => $request->name,
-                'latitude'  => $request->latitude,
-                'longitude' => $request->longitude,
-                'country_id'  =>  $request->country_id,
-            ]);
-            $address->clients()->attach(auth()->user()->client_id);
-            return \apiResponse(['address'  => new AddressResource($address)]);
-        }catch(Exception $e){
-            return \apiResponse(null,$e->getMessage(),400);
-        }
-
-    }
-
-
-    function addAddressToMyList(Request $request) {
-        try{
-            $address = Address::find($request->id);
-            $address->clients()->attach(auth()->user()->client_id);
-            return \apiResponse(['address'  => new AddressResource($address)]);
-        }catch(Exception $e){
-            return \apiResponse(null,$e->getMessage(),400);
-        }
-    }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show( $address)
-    {
-
-        //return apiResponse(AddressResource::make($address));
         try {
-            // Find the address by ID, or throw an exception if not found
-            $address = Address::findOrFail($address);
-            // Return the response if the address is found
-            return apiResponse(AddressResource::make($address));
-        } catch (ModelNotFoundException $e) {
-            // Return a response if the address is not found
-            return apiResponse(null, 'Address not found', 404);
+            $client = auth()->user()->client;
+
+            // Check if the client has reached the address limit
+            $addressCount = Address::where('client_id', $client->id)->count();
+            if ($addressCount >= 100) {
+                throw new Exception("You've reached the maximum count of addresses!");
+            }
+
+            // Get the formatted address using the latitude and longitude
+            $formattedAddress = $this->getFormattedAddress($request->latitude, $request->longitude);
+
+            $address = Address::create([
+                'name' => $request->name,
+                'latitude' => $request->latitude,
+                'longitude' => $request->longitude,
+                'location_description' => $formattedAddress,
+                'country_id' => $request->country_id,
+                'client_id' => $client->id,
+            ]);
+
+            $address->indexByLocation();
+            $address->save();
+
+            // Attach the client to the address
+            $this->manageAddressClients($address, $client->id, 'attach');
+
+            return apiResponse(['address' => new AddressResource($address)]);
+        } catch (Exception $e) {
+            return apiResponse(null, $e->getMessage(), 400);
         }
     }
 
     /**
-     * Update the specified resource in storage.
+     * Add address to user's list.
      */
-    public function update(Request $request, Address $address)
+    public function addAddressToMyList(Request $request)
     {
-        $address->update($request->only(['name', 'latitude','longitude']));
+        try {
+            $address = Address::findOrFail($request->id);
+            $this->manageAddressClients($address, auth()->user()->client_id, 'attach');
+            return apiResponse(['address' => new AddressResource($address)]);
+        } catch (Exception $e) {
+            return apiResponse(null, $e->getMessage(), 400);
+        }
+    }
 
-        return  apiResponse(new AddressResource($address));
+    /**
+     * Move address to another client's account.
+     */
+    public function moveAddress(Request $request)
+    {
+        try {
+            $address = Address::findOrFail($request->address_id);
+            $address->client_id = $request->client_id;
+            $address->save();
+            return apiResponse(['message' => 'Moved successfully!']);
+        } catch (Exception $e) {
+            return apiResponse(null, $e->getMessage(), 400);
+        }
     }
 
     /**
@@ -98,12 +105,42 @@ class AddressController extends Controller
      */
     public function destroy(Address $address)
     {
-        $address->clients()->detach(\auth()->user()->client_id);
-        if($address->clients()->count() == 0){
-            $address->delete();
-        }
-        return  apiResponse(null,__('Deleted Successfully'));
+        // Detach the current client from the address and delete it if no clients are attached
+        $this->manageAddressClients($address, auth()->user()->client_id, 'detach');
+        return apiResponse(null, __('Deleted Successfully'));
     }
 
+    /**
+     * Manage the clients associated with the address.
+     */
+    private function manageAddressClients(Address $address, $clientId, $action = 'attach')
+    {
+        if ($action === 'attach') {
+            $address->clients()->attach($clientId);
+        } elseif ($action === 'detach') {
+            $address->clients()->detach($clientId);
+            if ($address->clients()->count() == 0) {
+                $address->delete();
+            }
+        }
+    }
 
+    /**
+     * Get the formatted address based on latitude and longitude.
+     */
+    private function getFormattedAddress($latitude, $longitude)
+    {
+        $apiKey = env('GOOGLE_MAPS_API_KEY');
+        $response = Http::get("https://maps.googleapis.com/maps/api/geocode/json", [
+            'latlng' => "{$latitude},{$longitude}",
+            'key' => $apiKey
+        ]);
+
+        if ($response->failed()) {
+            throw new Exception("Google Maps API request failed.");
+        }
+
+        $data = $response->json();
+        return $data['results'][0]['formatted_address'] ?? null;
+    }
 }

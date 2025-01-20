@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 // use App\Http\Controllers\Api\AddressController as AddressController;
 // use App\Http\Controllers\Api\ClientController;
+use App\Http\Controllers\Api\AddressController as AddressController;
+use App\Http\Controllers\Api\ClientController;
 
 /*
 |--------------------------------------------------------------------------
@@ -33,15 +35,16 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout'])->name("api.logout");
     Route::post('changePassword', [AuthController::class, 'changePassword'])->name("api.password.change");
-    Route::get('filer/{var}',[\App\Http\Controllers\Api\ClientController::class, 'filer']);
+    Route::get('filer/{var}',[ClientController::class, 'filer']);
     //client
     Route::group([  'prefix' => 'client','middleware' => 'client'], function () {
 
         Route::get('/',  [\App\Http\Controllers\Api\HomeController::class, 'index']);
-        Route::group(['as'  => 'addresses.','prefix'    => 'addresses'],function(){
-            Route::post('add_to_my_list',[\App\Http\Controllers\Api\AddressController::class,'addAddressToMyList']);
+        Route::group(['as'  => 'addresses.' , 'prefix'  => 'addresses'],function(){
+            Route::post('share_address',[AddressController::class,'moveAddress']);
         });
-        Route::apiResource('addresses', \App\Http\Controllers\Api\AddressController::class);
+
+        Route::apiResource('addresses', AddressController::class);
         Route::get('categories',  [\App\Http\Controllers\Api\CategoryController::class, 'index']);
         Route::get('subcategories',  [\App\Http\Controllers\Api\SubcategoryController::class, 'index']);
         //Route::apiResource('services', \App\Http\Controllers\Api\ServiceController::class);
@@ -50,7 +53,7 @@ Route::middleware('auth:sanctum')->group(function () {
         });
         Route::apiResource('shipments', \App\Http\Controllers\Api\ShipmentController::class);
         Route::apiResource('shipments-images', \App\Http\Controllers\Api\ShipmentImageController::class)->except(['update','edit']);
-        Route::apiResource('clients', \App\Http\Controllers\Api\ClientController::class);
+        Route::apiResource('clients', ClientController::class);
         Route::apiResource('prohibitions', \App\Http\Controllers\Api\ProhibitionController::class);
         Route::apiResource('restrictions', \App\Http\Controllers\Api\RestrictionController::class);
 
@@ -58,5 +61,4 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('notifications', \App\Http\Controllers\Api\NotificationController::class);
 
 });
-
 
