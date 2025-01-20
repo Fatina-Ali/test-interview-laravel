@@ -71,5 +71,9 @@ class Shipment extends Model
         return self::where('serial_num',$serial_num)->first();
     }
 
+    public function deliveryTask(){
+        return $this->belongsTo(DeliveryTask::class);
+    }
+
 
 }
