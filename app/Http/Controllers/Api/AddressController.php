@@ -6,8 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\AddressResource;
 use App\Models\Address;
 use App\Models\Client;
+use Exception;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -36,11 +37,56 @@ class AddressController extends Controller
     /**
      * Store a newly created resource in storage.
      */
+
+
     public function store(Request $request)
     {
+        try {
+            $latitude = $request->latitude;
+            $longitude = $request->longitude;
 
+            $client = auth()->user()->client;
 
+            $addressCount = Address::where('client_id', $client->id)->count();
+            if ($addressCount >= 100) {
+                throw new Exception("You've reached the maximum count of addresses!");
+            }
+
+            $apiKey = env('GOOGLE_MAPS_API_KEY');
+            $response = Http::get("https://maps.googleapis.com/maps/api/geocode/json", [
+                'latlng' => "{$latitude},{$longitude}",
+                'key' => $apiKey
+            ]);
+
+            if ($response->failed()) {
+                throw new Exception("Google Maps API request failed.");
+            }
+
+            $data = $response->json();
+            $formatted_address = $data['results'][0]['formatted_address'] ?? null;
+
+            if (!$formatted_address) {
+                throw new Exception("Formatted address not found.");
+            }
+
+            $address = new Address([
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+                'location_description' => $formatted_address,
+                'country_id' => $request->country_id,
+                'client_id' => $client->id
+            ]);
+
+            $address->indexByLocation();
+
+            $address->save();
+
+            return apiResponse(['address' => new AddressResource($address)]);
+        } catch (Exception $e) {
+            return apiResponse(null, $e->getMessage(), 400);
+        }
     }
+
 
     /**
      * Display the specified resource.
@@ -66,8 +112,24 @@ class AddressController extends Controller
     public function update(Request $request, Address $address)
     {
         $address->update($request->only(['name', 'latitude','longitude']));
-
+        $address->indexByLocation();
         return  apiResponse(new AddressResource($address));
+    }
+
+
+
+    /**
+     * Move address to another client's account
+     */
+    function moveAddress(Request $request) {
+        try{
+            $address = Address::find($request->address_id);
+            $address->client_id = $request->client_id;
+            $address->save();
+            return \apiResponse(['message'  => 'Moved successfully!']);
+        }catch(Exception $e){
+            return \apiResponse(null,$e->getMessage(),400);
+        }
     }
 
     /**
