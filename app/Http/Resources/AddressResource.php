@@ -18,7 +18,8 @@ class AddressResource extends JsonResource
             'name'  => $this->name,
             'latitude'  => $this->latitude,
             'longitude' => $this->longitude,
-            'country'   => new CountryResource($this->country)
+            'country'   => new CountryResource($this->country),
+            'location_description'  => $this->location_description,
         ];
     }
 }
