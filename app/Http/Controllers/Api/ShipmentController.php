@@ -37,39 +37,45 @@ class ShipmentController extends Controller
 
     public function store(Request $request)
     {
+
         $validatedData = $request->validate([
-            'description'        => 'required',
-            'receiver'           => 'required|array',
-            'sender_address'     => 'required|array',
-            'receiver_address'   => 'required|array',
-            'created_at_unix'    => 'required|integer',
+            'description' => 'required',
+            'receiver' => 'required|array',
+            'sender_address' => 'required|array',
+            'receiver_address' => 'required|array',
+            'created_at_unix' => 'required|integer',
         ]);
 
+        DB::beginTransaction();
+
         try {
-            $shipment = DB::transaction(function () use ($validatedData) {
-                $receiver = $this->handleClient($validatedData['receiver']);
-                $receiverAddress = $this->handleAddress($validatedData['receiver_address'], $receiver, true);
+            $receiver = $this->handleClient($validatedData['receiver']);
+            $receiverAddress = $this->handleAddress($validatedData['receiver_address'], $receiver, true);
+            $sender = Client::where('user_id', $this->user_id)->firstOrFail();
+            $senderAddress = $this->handleAddress($validatedData['sender_address'], $sender);
 
-                $sender = Client::where('user_id', $this->user_id)->firstOrFail();
-                $senderAddress = $this->handleAddress($validatedData['sender_address'], $sender);
+            $shipment = Shipment::create([
+                'serial_num' => Shipment::getServiceNum(),
+                'sender_id' => $sender->id,
+                'description' => $validatedData['description'],
+                'receiver_id' => $receiver->id,
+                'sender_address_id' => $senderAddress->id,
+                'receiver_address_id' => $receiverAddress->id,
+                'created_at_unix' => $validatedData['created_at_unix'],
+                'status' => 1,
+            ]);
 
-                return Shipment::create([
-                    'serial_num'          => Shipment::getServiceNum(),
-                    'sender_id'           => $sender->id,
-                    'description'         => $validatedData['description'],
-                    'receiver_id'         => $receiver->id,
-                    'sender_address_id'   => $senderAddress->id,
-                    'receiver_address_id' => $receiverAddress->id,
-                    'created_at_unix'     => $validatedData['created_at_unix'],
-                    'status'              => 1,
-                ]);
-            });
 
+            DB::commit();
             return apiResponse(['shipment' => new ShipmentResource($shipment)]);
-        } catch (Exception $e) {
+        }
+        catch (Exception $e) {
+            DB::rollBack();
             return apiResponse(null, $e->getMessage(), 400);
         }
     }
+
+
 
     public function show($id)
     {
@@ -162,21 +168,23 @@ class ShipmentController extends Controller
 
         return Client::findOrFail($data['id']);
     }
-
     private function checkCountryLimitations($country)
     {
         DB::transaction(function () use ($country) {
+
             $shipmentCount = Shipment::whereHas('receiverAddress', function ($query) use ($country) {
                 $query->where('country_id', $country->id);
-            })->whereRaw('DATE(created_at) = CURDATE()')
-              ->lockForUpdate()
-              ->count();
+            })
+            ->whereRaw('DATE(created_at) = CURDATE()')
+            ->lockForUpdate()
+            ->count();
 
             if ($shipmentCount >= 100) {
                 throw new Exception("The daily shipment limit for this country has been reached. Please try again tomorrow.");
             }
         });
     }
+
 
     private function getFormattedAddress($latitude, $longitude)
     {
